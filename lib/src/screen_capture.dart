@@ -29,10 +29,6 @@ class ScreenCapture {
     final correctedRect = rect;
     if (correctedRect.isEmpty) return null;
 
-    print('''
-            'width': ${correctedRect.width * primaryDisplay.scaleFactor!.toInt()},
-        'height': ${correctedRect.height * primaryDisplay.scaleFactor!.toInt()},
-    ''');
     final result = await _methodChannel.invokeMethod<Map<Object?, Object?>>(
       'captureScreenArea',
       <String, dynamic>{
