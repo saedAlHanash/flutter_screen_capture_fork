@@ -4,20 +4,21 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'flutter_screen_capture'
-  s.version          = '0.0.1'
-  s.summary          = 'A new Flutter plugin project.'
+  s.version          = '1.3.0'
+  s.summary          = 'Capture the screen, an area of it, or a single pixel color on macOS.'
   s.description      = <<-DESC
-A new Flutter plugin project.
+Flutter plugin that captures the entire screen, part of it, or a single
+pixel color on macOS using CoreGraphics.
                        DESC
-  s.homepage         = 'http://example.com'
+  s.homepage         = 'https://github.com/albemala/flutter_screen_capture'
   s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
+  s.author           = { 'flutter_screen_capture contributors' => 'https://github.com/albemala/flutter_screen_capture' }
 
   s.source           = { :path => '.' }
   s.source_files     = 'Classes/**/*'
   s.dependency 'FlutterMacOS'
 
-  s.platform = :osx, '10.11'
+  s.platform = :osx, '10.14'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
 end

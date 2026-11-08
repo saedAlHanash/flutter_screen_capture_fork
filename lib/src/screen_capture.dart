@@ -1,8 +1,25 @@
+import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
+
 import 'package:flutter/services.dart';
 import 'package:flutter_screen_capture/src/captured_screen_area.dart';
-import 'package:image/image.dart' as image_lib;
 import 'package:screen_retriever/screen_retriever.dart';
 
+/// Captures pixels from the screen.
+///
+/// All rectangles and points passed to this class are in **logical** screen
+/// coordinates, the same coordinate space returned by
+/// `ScreenRetriever.instance.getCursorScreenPoint()`.
+///
+/// On Windows the logical coordinates are converted to physical pixels using
+/// the device pixel ratio, so the capture is correct when display scaling
+/// (125%, 150%, ...) is enabled. On macOS the native side already works in
+/// points and scales Retina captures down by itself.
+///
+/// Parts of the requested area that are outside every display are returned
+/// as black pixels (Windows) or are cropped by the OS (macOS/Linux); always
+/// read [CapturedScreenArea.width] and [CapturedScreenArea.height] instead of
+/// assuming the requested size.
 class ScreenCapture {
   final _methodChannel = const MethodChannel('flutter_screen_capture');
 
@@ -19,97 +36,61 @@ class ScreenCapture {
     );
   }
 
-  /// Captures a screen area of the main display.
-  Future<CapturedScreenArea?> captureScreenArea(
-    Rect rect,
-  ) async {
-    final primaryDisplay = await ScreenRetriever.instance.getPrimaryDisplay();
-    if (rect.isEmpty) return null;
+  /// Captures a screen area, given in logical screen coordinates.
+  Future<CapturedScreenArea?> captureScreenArea(Rect rect) async {
+    if (rect.isEmpty || !rect.isFinite) return null;
 
-    final correctedRect = rect;
-    if (correctedRect.isEmpty) return null;
+    final scale = await _logicalToNativeScale();
+    final x = (rect.left * scale).floor();
+    final y = (rect.top * scale).floor();
+    // Round the size up so a 1x1 logical request never becomes 0x0.
+    final width = (rect.width * scale).ceil();
+    final height = (rect.height * scale).ceil();
+    if (width <= 0 || height <= 0) return null;
 
     final result = await _methodChannel.invokeMethod<Map<Object?, Object?>>(
       'captureScreenArea',
       <String, dynamic>{
-        'x': correctedRect.left.toInt(),
-        'y': correctedRect.top.toInt(),
-        'width': (correctedRect.width * primaryDisplay.scaleFactor!).toInt(),
-        'height': (correctedRect.height * primaryDisplay.scaleFactor!).toInt(),
+        'x': x,
+        'y': y,
+        'width': width,
+        'height': height,
       },
     );
     if (result == null) return null;
 
     final area = CapturedScreenArea.fromJson(result);
-    return _sanitizeCapturedArea(area, rect, correctedRect);
+    if (area.width <= 0 || area.height <= 0) return null;
+    if (area.buffer.length < area.width * area.height * area.bytesPerPixel) {
+      return null;
+    }
+    return area;
   }
 
-  /// Captures the color of a pixel on the screen.
+  /// Captures the color of a pixel on the screen, given in logical
+  /// screen coordinates.
   Future<Color?> captureScreenColor(double x, double y) async {
-    final area = await captureScreenArea(
-      Rect.fromLTWH(x, y, 1, 1),
-    );
-    return area?.getPixelColor(0, 0);
+    final area = await captureScreenArea(Rect.fromLTWH(x, y, 1, 1));
+    if (area == null) return null;
+    return area.getPixelColor(0, 0);
   }
 }
 
-// Future<Rect> _sanitizeRect(Rect rect) async {
-//   final primaryDisplay = await ScreenRetriever.instance.getPrimaryDisplay();
-//   return rect.intersect(
-//     Rect.fromLTWH(
-//       0,
-//       0,
-//       primaryDisplay.size.width * primaryDisplay.scaleFactor!.toDouble(),
-//       primaryDisplay.size.height * primaryDisplay.scaleFactor!.toDouble(),
-//     ),
-//   );
-// }
+/// The factor between the logical coordinates used by the Dart API and the
+/// coordinates expected by the native implementation.
+Future<double> _logicalToNativeScale() async {
+  if (!Platform.isWindows) return 1;
 
-Future<CapturedScreenArea> _sanitizeCapturedArea(
-  CapturedScreenArea area,
-  Rect originalRect,
-  Rect correctedRect,
-) async {
-  var correctedArea = area;
-  return correctedArea;
-
-  if (correctedRect != originalRect) {
-    // The intersection area (between the primary display area
-    // and the requested area) is smaller than the requested area.
-    // Usually this happens when requesting an area close to the screen border.
-    // We need to fill the captured area with black pixels,
-    // where the pixels are outside the requested area.
-
-    final originalWidth = originalRect.width.toInt();
-    final originalHeight = originalRect.height.toInt();
-    // Create a black image of the size of the requested area
-    final emptyImage = image_lib.Image.fromBytes(
-      width: originalWidth,
-      height: originalHeight,
-      bytes: Uint8List.fromList(
-        List<int>.filled(
-          originalWidth * originalHeight * 4,
-          0,
-        ),
-      ).buffer,
-    );
-    // Draw the captured image on top of the black image
-    final correctedImage = image_lib.compositeImage(
-      emptyImage,
-      area.toImage(),
-      dstX: (correctedRect.left - originalRect.left).toInt(),
-      dstY: (correctedRect.top - originalRect.top).toInt(),
-      blend: image_lib.BlendMode.direct,
-    );
-    // Update the captured area with the new image
-    correctedArea = correctedArea.copyWith(
-      buffer: correctedImage.getBytes(
-        order: correctedArea.channelOrder,
-      ),
-      width: originalWidth,
-      height: originalHeight,
-    );
+  // screen_retriever (Windows) converts the physical cursor position to
+  // logical coordinates by dividing by the Flutter view's devicePixelRatio,
+  // so multiplying by the same value is the exact inverse.
+  final views = PlatformDispatcher.instance.views;
+  if (views.isNotEmpty) {
+    final ratio = views.first.devicePixelRatio;
+    if (ratio > 0) return ratio;
   }
 
-  return correctedArea;
+  final primaryDisplay = await ScreenRetriever.instance.getPrimaryDisplay();
+  final ratio = primaryDisplay.scaleFactor?.toDouble() ?? 1;
+  return ratio > 0 ? ratio : 1;
 }

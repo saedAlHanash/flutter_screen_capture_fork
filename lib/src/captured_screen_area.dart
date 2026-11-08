@@ -4,6 +4,10 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as image_lib;
 
+/// Raw pixels of a captured screen area.
+///
+/// [buffer] is tightly packed: `width * bytesPerPixel` bytes per row, no row
+/// padding. The channel order depends on the platform, see [channelOrder].
 @immutable
 class CapturedScreenArea {
   final Uint8List buffer;
@@ -12,7 +16,7 @@ class CapturedScreenArea {
   final int bitsPerPixel;
   final int bytesPerPixel;
 
-  double get aspectRatio => width / height;
+  double get aspectRatio => height == 0 ? 0 : width / height;
 
   const CapturedScreenArea({
     required this.buffer,
@@ -23,10 +27,19 @@ class CapturedScreenArea {
   });
 
   factory CapturedScreenArea.fromJson(Map<Object?, Object?> json) {
+    final rawBuffer = json['buffer'];
+    final Uint8List buffer;
+    if (rawBuffer is Uint8List) {
+      // The standard method codec already delivers a Uint8List:
+      // use it directly instead of copying it element by element.
+      buffer = rawBuffer;
+    } else if (rawBuffer is List) {
+      buffer = Uint8List.fromList(rawBuffer.cast<int>());
+    } else {
+      buffer = Uint8List(0);
+    }
     return CapturedScreenArea(
-      buffer: Uint8List.fromList(
-        (json['buffer'] as List<Object?>? ?? []).cast<int>(),
-      ),
+      buffer: buffer,
       width: json['width'] as int? ?? 0,
       height: json['height'] as int? ?? 0,
       bitsPerPixel: json['bitsPerPixel'] as int? ?? 0,
@@ -36,7 +49,7 @@ class CapturedScreenArea {
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
-      'buffer': buffer.toList(),
+      'buffer': buffer,
       'width': width,
       'height': height,
       'bitsPerPixel': bitsPerPixel,
@@ -44,19 +57,29 @@ class CapturedScreenArea {
     };
   }
 
+  /// The byte order of the four channels in [buffer].
+  ///
+  /// - macOS (CoreGraphics, little-endian premultiplied-first): BGRA
+  /// - Windows (GDI `GetDIBits`, 32-bit `BI_RGB`): BGRA
+  /// - Linux (`GdkPixbuf` with alpha): RGBA
+  image_lib.ChannelOrder get channelOrder {
+    if (Platform.isMacOS || Platform.isWindows) {
+      return image_lib.ChannelOrder.bgra;
+    }
+    return image_lib.ChannelOrder.rgba;
+  }
+
+  /// Whether [buffer] stores blue before red.
+  bool get isBgra => channelOrder == image_lib.ChannelOrder.bgra;
+
   image_lib.Image toImage() {
     return image_lib.Image.fromBytes(
       width: width,
       height: height,
       bytes: Uint8List.fromList(buffer).buffer,
+      numChannels: 4,
       order: channelOrder,
-      // format: imageFormat,
     );
-  }
-
-  image_lib.ChannelOrder get channelOrder {
-    if (Platform.isMacOS) return image_lib.ChannelOrder.bgra;
-    return image_lib.ChannelOrder.rgba;
   }
 
   Uint8List toPngImage() {
@@ -67,11 +90,13 @@ class CapturedScreenArea {
     if (x < 0 || x >= width || y < 0 || y >= height) {
       throw RangeError('Pixel coordinates out of range');
     }
-    final index = ((y * width + x) * bytesPerPixel).toInt();
-    final b = buffer[index];
+    final index = (y.toInt() * width + x.toInt()) * bytesPerPixel;
+    final c0 = buffer[index];
     final g = buffer[index + 1];
-    final r = buffer[index + 2];
-    final a = buffer[index + 3];
+    final c2 = buffer[index + 2];
+    final a = bytesPerPixel >= 4 ? buffer[index + 3] : 0xFF;
+    final r = isBgra ? c2 : c0;
+    final b = isBgra ? c0 : c2;
     return Color.fromARGB(a, r, g, b);
   }
 

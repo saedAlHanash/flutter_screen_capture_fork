@@ -3,25 +3,61 @@
 #include <flutter_linux/flutter_linux.h>
 #include <glib/gstdio.h>
 #include <cstring>
+#include <vector>
 #include <gdk/gdk.h>
 
-GdkPixbuf *CaptureScreenArea(int64_t x, int64_t y, int64_t width, int64_t height)
+// Captures an area of the root window (X11). Returns a new RGBA pixbuf
+// with 4 channels, or nullptr on failure. The caller owns the result.
+//
+// Note: on Wayland the root window is not readable, so this returns nullptr
+// (or a black image) and the Dart side gets a CAPTURE_FAILED error.
+static GdkPixbuf *CaptureScreenArea(int64_t x, int64_t y, int64_t width, int64_t height)
 {
-    // TODO
-    // The passed width and height args, contains the resolution of Primary monitor
-    // If user wants to capture the whole display, including the secondary monitors,
-    // width and height can be calculated using
+    if (width <= 0 || height <= 0)
+        return nullptr;
 
-    // gdk_window_get_width(window)
-    // gdk_window_get_height(window)
-    GdkPixbuf *screenshot = nullptr;
-    GdkPixbuf *screenShotWithAlpha = nullptr;
     GdkWindow *window = gdk_get_default_root_window();
-    screenshot =
-        gdk_pixbuf_get_from_window(window, x, y, width,
-                                   height);
-    screenShotWithAlpha = gdk_pixbuf_add_alpha(screenshot, FALSE, 0, 0, 0);
-    return screenShotWithAlpha;
+    if (window == nullptr)
+        return nullptr;
+
+    GdkPixbuf *screenshot = gdk_pixbuf_get_from_window(window, x, y, width, height);
+    if (screenshot == nullptr)
+        return nullptr;
+
+    // gdk_pixbuf_add_alpha returns a new pixbuf; the original must be released.
+    GdkPixbuf *screenshotWithAlpha = gdk_pixbuf_add_alpha(screenshot, FALSE, 0, 0, 0);
+    g_object_unref(screenshot);
+    return screenshotWithAlpha;
+}
+
+// Copies the pixbuf pixels into a tightly packed buffer (no row padding).
+static FlValue *PixbufToTightBuffer(GdkPixbuf *pixbuf)
+{
+    const int width = gdk_pixbuf_get_width(pixbuf);
+    const int height = gdk_pixbuf_get_height(pixbuf);
+    const int channels = gdk_pixbuf_get_n_channels(pixbuf);
+    const int rowstride = gdk_pixbuf_get_rowstride(pixbuf);
+    const guint8 *pixels = gdk_pixbuf_read_pixels(pixbuf);
+    const size_t tightRow = static_cast<size_t>(width) * channels;
+
+    if (static_cast<size_t>(rowstride) == tightRow)
+        return fl_value_new_uint8_list(pixels, tightRow * height);
+
+    std::vector<uint8_t> tight(tightRow * height);
+    for (int row = 0; row < height; row++)
+        memcpy(tight.data() + row * tightRow, pixels + static_cast<size_t>(row) * rowstride, tightRow);
+    return fl_value_new_uint8_list(tight.data(), tight.size());
+}
+
+static bool GetIntArg(FlValue *args, const char *key, int64_t *out)
+{
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP)
+        return false;
+    FlValue *value = fl_value_lookup_string(args, key);
+    if (value == nullptr || fl_value_get_type(value) != FL_VALUE_TYPE_INT)
+        return false;
+    *out = fl_value_get_int(value);
+    return true;
 }
 
 struct _FlutterScreenCapturePlugin
@@ -53,50 +89,39 @@ static void flutter_screen_capture_plugin_handle_method_call(
     const gchar *method = fl_method_call_get_name(method_call);
     FlValue *args = fl_method_call_get_args(method_call);
 
-    g_autoptr(FlMethodResponse) response;
+    g_autoptr(FlMethodResponse) response = nullptr;
     if (strcmp(method, "captureScreenArea") == 0)
     {
-        auto capturedScreenArea = CaptureScreenArea(
-            fl_value_get_int(fl_value_lookup_string(args, "x")),
-            fl_value_get_int(fl_value_lookup_string(args, "y")),
-            fl_value_get_int(fl_value_lookup_string(args, "width")),
-            fl_value_get_int(fl_value_lookup_string(args, "height")));
-        if (capturedScreenArea == nullptr)
+        int64_t x, y, width, height;
+        if (!GetIntArg(args, "x", &x) || !GetIntArg(args, "y", &y) ||
+            !GetIntArg(args, "width", &width) || !GetIntArg(args, "height", &height))
         {
             response = FL_METHOD_RESPONSE(fl_method_error_response_new(
-                "captureScreenArea failed",
-                nullptr,
-                nullptr));
+                "INVALID_ARGUMENTS", "Invalid arguments", nullptr));
         }
-        else
+        else if (GdkPixbuf *capturedScreenArea = CaptureScreenArea(x, y, width, height))
         {
+            const int channels = gdk_pixbuf_get_n_channels(capturedScreenArea);
             FlValue *dict = fl_value_new_map();
+            fl_value_set_string_take(dict, "buffer", PixbufToTightBuffer(capturedScreenArea));
             fl_value_set_string_take(
-                dict,
-                "buffer",
-                fl_value_new_uint8_list(
-                    gdk_pixbuf_read_pixels(capturedScreenArea),
-                    gdk_pixbuf_get_byte_length(capturedScreenArea)));
+                dict, "width", fl_value_new_int(gdk_pixbuf_get_width(capturedScreenArea)));
             fl_value_set_string_take(
-                dict,
-                "width",
-                fl_value_new_int(gdk_pixbuf_get_width(capturedScreenArea)));
+                dict, "height", fl_value_new_int(gdk_pixbuf_get_height(capturedScreenArea)));
             fl_value_set_string_take(
-                dict,
-                "height",
-                fl_value_new_int(gdk_pixbuf_get_height(capturedScreenArea)));
-            fl_value_set_string_take(
-                dict,
-                "bitsPerPixel",
-                fl_value_new_int(gdk_pixbuf_get_bits_per_sample(capturedScreenArea)));
-            fl_value_set_string_take(
-                dict,
-                "bytesPerPixel",
-                fl_value_new_int(gdk_pixbuf_get_n_channels(capturedScreenArea)));
+                dict, "bitsPerPixel",
+                fl_value_new_int(gdk_pixbuf_get_bits_per_sample(capturedScreenArea) * channels));
+            fl_value_set_string_take(dict, "bytesPerPixel", fl_value_new_int(channels));
 
             g_object_unref(capturedScreenArea);
 
             response = FL_METHOD_RESPONSE(fl_method_success_response_new(dict));
+            fl_value_unref(dict);
+        }
+        else
+        {
+            response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+                "CAPTURE_FAILED", "Unable to capture the screen area", nullptr));
         }
     }
     else

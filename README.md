@@ -6,7 +6,7 @@ A plugin to capture the entire screen or part of it on desktop platforms.
 
 |             | macOS | Windows | Linux |
 |:------------|:------|:--------|:------|
-| **Support** | ✅     | ✅       | ❌     |
+| **Support** | ✅     | ✅       | ⚠️ X11 only |
 
 ## Usage
 
@@ -59,11 +59,25 @@ SizedBox(
 See the [example app](https://github.com/albemala/flutter_screen_capture/tree/main/example) for a complete usage
 example.
 
+## Coordinates
+
+All rects and points are **logical** screen coordinates, the same space returned by
+`ScreenRetriever.instance.getCursorScreenPoint()`. On Windows they are converted to physical
+pixels with the device pixel ratio, so display scaling (125%, 150%, ...) is handled.
+macOS returns one pixel per point on Retina displays.
+
+The returned `CapturedScreenArea` can be smaller than requested (for example when the area is
+partly off-screen on macOS), so always use its `width` and `height`.
+Pixels are tightly packed; `channelOrder` tells you the byte order (BGRA on macOS/Windows,
+RGBA on Linux) and `getPixelColor` already handles it.
+
 ## Current limitations
 
-- Linux is not supported yet.
-- Capturing on multiple screens is not supported yet.
-- Capturing on high-resolution screens (e.g. Retina displays) is not supported yet.
+- Linux works on X11 only; Wayland does not allow reading the root window.
+- On Windows with several monitors that use **different** scaling factors, the conversion uses the
+  scale factor of the app window, so captures on the other monitors may be offset.
+- macOS uses `CGWindowListCreateImage`, which is deprecated since macOS 14 (ScreenCaptureKit is the
+  replacement) and needs the Screen Recording permission.
 
 ## Projects using this package
 

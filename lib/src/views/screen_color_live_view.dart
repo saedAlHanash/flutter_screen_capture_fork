@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_screen_capture/src/screen_capture.dart';
@@ -21,26 +23,43 @@ class _ScreenColorLiveViewState extends State<ScreenColorLiveView>
     with SingleTickerProviderStateMixin {
   final _plugin = ScreenCapture();
   Color _color = const Color(0xFF000000);
-  late Ticker _ticker;
+  late final Ticker _ticker;
+
+  /// True while a capture is running, so frames do not pile up
+  /// platform calls faster than the platform can answer them.
+  bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker((duration) async {
+    _ticker = createTicker((_) => unawaited(_captureFrame()));
+    _ticker.start();
+  }
+
+  Future<void> _captureFrame() async {
+    if (_busy) return;
+    _busy = true;
+    try {
       final cursorScreenPoint =
           await ScreenRetriever.instance.getCursorScreenPoint();
       final color = await _plugin.captureScreenColor(
         cursorScreenPoint.dx,
         cursorScreenPoint.dy,
       );
-      if (color == null) return;
-
-      if (!mounted) return;
-      setState(() {
-        _color = color;
-      });
-    });
-    _ticker.start();
+      if (color == null || !mounted || color == _color) return;
+      setState(() => _color = color);
+    } on Object catch (error, stack) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stack,
+          library: 'flutter_screen_capture',
+          context: ErrorDescription('while capturing the live screen color'),
+        ),
+      );
+    } finally {
+      _busy = false;
+    }
   }
 
   @override

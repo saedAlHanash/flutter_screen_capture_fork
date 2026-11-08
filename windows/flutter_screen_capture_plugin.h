@@ -6,6 +6,8 @@
 
 #include <memory>
 #include <any>
+#include <cstdint>
+#include <vector>
 #include "flutter/encodable_value.h"
 
 namespace flutter_screen_capture {
@@ -38,11 +40,13 @@ namespace flutter_screen_capture {
                 std::unique_ptr <flutter::MethodResult<flutter::EncodableValue>> result
         );
 
-        static CapturedScreenArea CaptureScreenArea(
+        // Returns false when the capture failed.
+        static bool CaptureScreenArea(
                 int x,
                 int y,
                 int width,
-                int height
+                int height,
+                CapturedScreenArea &out
         );
     };
 
